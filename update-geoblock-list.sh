@@ -81,28 +81,25 @@
 #   These shoudld be created via EdgeOS BUI or CLI, and to have any
 #     effect must be assigned to one or more firewall rules
 #   Leave empty to not populate IPset netgroup
-fwGroupNets4="Nets4-BlackList"
-fwGroupNets6="Nets6-BlackList"
+fwGroupNets4="NETv4-GEOBLOCK"
+fwGroupNets6="NETv6-GEOBLOCK"
 #
 # Persistent data location (directory)
 dirUserData="/config/user-data"
 #
-# Locally-defined blacklist, in above persistent location (file, optional)
-fnLocalBlackList="LocalBlackList.txt"
-#
 # Locally-defined whitelist, in above persistent location (file, optional)
-fnLocalWhiteList="LocalWhiteList.txt"
+fnLocalWhiteList="geo-whitelist.txt"
 #
 # List of URLs from which to retrieve blacklists (file, required)
-fnUrlList="fw-BlackList-URLs.txt"
+fnUrlList="geoblock.txt"
 #
 # Files to save persistent IPSET content (file, optional)
 #   This can be used in a post-config.d script to recover the
 #     existing blacklist quickly during restart rather than having to
 #     re-run this script.  Either option would suffice.
 #   Leave empty to not save network group across reboots
-fnIPSetSave4="fw-IPSET-4.txt"
-fnIPSetSave6="fw-IPSET-6.txt"
+fnIPSetSave4="geo-IPSET-4.txt"
+fnIPSetSave6="geo-IPSET-6.txt"
 #
 # Default verbosity (for messages to display/tty)
 #   0 = Completely silent
@@ -110,7 +107,7 @@ fnIPSetSave6="fw-IPSET-6.txt"
 #   2 = + informational status
 #   3 = + cURL, iprange status output
 #   9 = + debug output
-verbose=2
+verbose=9
 #
 # Use email for messages
 #   Values same as for 'verbosity' above
@@ -196,7 +193,6 @@ ipRangeRedEntries=${fwSetMaxElem}
 ## Definitions
 ##
 fnUsedSourceList="source-urls.txt"
-fpLocBlackList="${dirUserData}/${fnLocalBlackList}"
 fpLocWhiteList="${dirUserData}/${fnLocalWhiteList}"
 fpUrlList="${dirUserData}/${fnUrlList}"
 [[ -n "${fnIPSetSave4}" ]] && fpIPSetSave4="${dirUserData}/${fnIPSetSave4}"
@@ -207,8 +203,8 @@ cmdBaseIPSet="sudo /sbin/ipset"
 cmdBaseSSMTP="/usr/sbin/ssmtp"
 cmdBaseLN="sudo /bin/ln"
 
-fwGroupTmp4="bl_tmp_4"
-fwGroupTmp6="bl_tmp_6"
+fwGroupTmp4="geo_tmp_4"
+fwGroupTmp6="geo_tmp_6"
 blUrl=()
 useIPRange=0
 flgOpt=0
@@ -391,24 +387,20 @@ startup()
     [[ -z "${fwGroupNets4}" && -z "${fwGroupNets6}" ]] && \
         die 20 "No firewall groups (IPsets) configured (Nothing to do!)"
 
-    debugMsg "Reading blocklist URL file '${fpUrlList}"
+    debugMsg "Reading geoblock file '${fpUrlList}"
     [[ -s "${fpUrlList}" ]] || \
-        die 18 "URL list file '${fpUrlList}' missing or empty"
+        die 18 "geoblock file '${fpUrlList}' missing or empty"
 
     while read line; do
         blUrl+=(${line})
     done < <(sed -e 's/#.*$//g' -e '/^[[:space:]]*$/d' ${fpUrlList})
     elCtBL=${#blUrl[@]}
-    debugMsg "Read ${elCtBL} URLs from blocklist URL file"
+    debugMsg "Read ${elCtBL} countries from geoblock file"
 
     [[ ${elCtBL} -gt 0 ]] || \
-        die 18 "URL list file '${fpUrlList}' contains no URLs"
+        die 18 "geoblock file '${fpUrlList}' contains no URLs"
 
-    if [[ -s ${fpLocBlackList} ]]; then
-        flBlockList="${fpLocBlackList}"
-    else
-        flBlockList=""
-    fi
+    flBlockList=""
 
     # Verify firewall groups exist and save creation parameters
     if [[ -n "${fwGroupNets4}" ]]; then
@@ -443,25 +435,21 @@ doFetch()
     # and there was nothing saved.  If there is content then we
     # continue on.
     #
-    fpUsedSourceList="${TMPDIR}/${myName}-${fnUsedSourceList}"
-    > ${fpUsedSourceList}
+    fpUsedSourceList="${TMPDIR}/${myName}-${fnUsedSourceList}" > ${fpUsedSourceList}
     debugMsg "Starting block file list: '${flBlockList}'"
+
     for (( i=0; i<${elCtBL}; i++ )); do
-        fnUrl="${blUrl[$i]}"
-        if [[ -n "${fnUrl}" ]]; then
-            printf '[%2.2d] %s\n' $i "${fnUrl}" >> ${fpUsedSourceList}
-            fnBase="$(printf '%2.2d' $i)_$(echo ${fnUrl} | \
-                awk -F/ '{print $3}')_$(basename ${fnUrl} | \
-                sed -e 's/?/_/' -e 's/api_key=[^&]*&\?//')"
-            cmdFlg=""
-            if [[ -s ${fnBase} ]]; then
-                cmdFlg="-z ${fnBase}"
-            fi
-            logMsg "Fetching '${fnUrl}'"
-            ${cmdBaseCURL} -R ${cmdFlg} -o ${fnBase} ${fnUrl}
+        fnNation="${blUrl[$i]}"
+        if [[ -n "${fnNation}" ]]; then
+            printf '[%2.2d] %s\n' $i "${fnNation}" >> ${fpUsedSourceList}
+
+            fnBase="${fnNation}-ipv4.txt"
+
+            logMsg "Fetching '${fnNation}' ipv4"
+            ${cmdBaseCURL} -R -o ${fnBase} https://www.ipdeny.com/ipblocks/data/aggregated/${fnNation}-aggregated.zone
             rc=$?
             if [[ ${rc} -ne 0 ]]; then
-                errMsg "Could not retrieve URL '${fnUrl}'"
+                errMsg "Could not retrieve URL '${fnUrl}' ipv4"
                 if [[ -s ${fnBase} ]]; then
                     # Have content, just complain
                     errMsg "cURL error ${rc}"
@@ -470,6 +458,29 @@ doFetch()
                     die 19 "cURL error ${rc}"
                 fi
             fi
+
+            # It is possible (not likely) that the requested file
+            # is legitimately empty.  We can ignore if so.
+            if [[ -s ${fnBase} ]]; then
+                flBlockList="${flBlockList} ${fnBase}"
+            fi
+
+            fnBase="${fnNation}-ipv6.txt"
+
+            logMsg "Fetching '${fnNation}' ipv6"
+            ${cmdBaseCURL} -R -o ${fnBase} https://www.ipdeny.com/ipv6/ipaddresses/aggregated/${fnNation}-aggregated.zone
+            rc=$?
+            if [[ ${rc} -ne 0 ]]; then
+                errMsg "Could not retrieve URL '${fnUrl}' ipv6"
+                if [[ -s ${fnBase} ]]; then
+                    # Have content, just complain
+                    errMsg "cURL error ${rc}"
+                else
+                    # Nothing received, let's abort
+                    die 19 "cURL error ${rc}"
+                fi
+            fi
+
             # It is possible (not likely) that the requested file
             # is legitimately empty.  We can ignore if so.
             if [[ -s ${fnBase} ]]; then
@@ -508,10 +519,10 @@ doProcess4()
 
     if [[ ${flgDoCounts} -gt 0 ]]; then
         # Save counts, total and unique
-        debugMsg "Counting total IPv4 addresses received"
         elCtTot4=$(wc -l ${fnTemp1} | cut -d\  -f1)
-        debugMsg "Counting unique IPv4 addresses received"
+        debugMsg "Counting total IPv4 addresses received > ${elCtTot4}"
         elCtUnq4=$(wc -l ${fnTemp2} | cut -d\  -f1)
+        debugMsg "Counting unique IPv4 addresses received > ${elCtUnq4}"
     fi
 
     flgOpt=0
@@ -544,15 +555,15 @@ doProcess4()
     fi
 
     # Save count, final (always need this for maxelem)
-    debugMsg "Counting IPv4 filtered addresses"
     elCtFnl4=$(wc -l ${fnTemp3} | cut -d\  -f1)
+    debugMsg "Counting IPv4 filtered addresses > ${elCtFnl4}"
 
     if [[ ${flgDoCounts} -gt 0 ]]; then
         # Count total number of prefixes
-        debugMsg "Counting IPv4 address prefixes"
         prfxCtFnl4=$(sed -e 's#^\([^/]*\)$#\1/0#' \
             -e 's#.*/\([^/]*\)$#\1#' ${fnTemp3} \
             | sort -u | wc -l)
+        debugMsg "Counting IPv4 address prefixes > ${prfxCtFnl4}"
     fi
 }
 #
@@ -579,10 +590,10 @@ doProcess6()
 
     if [[ ${flgDoCounts} -gt 0 ]]; then
         # Save counts, total and unique
-        debugMsg "Counting total IPv6 addresses received"
         elCtTot6=$(wc -l ${fnTemp1} | cut -d\  -f1)
-        debugMsg "Counting unique IPv6 addresses received"
+        debugMsg "Counting total IPv6 addresses received > ${elCtTot6}"
         elCtUnq6=$(wc -l ${fnTemp2} | cut -d\  -f1)
+        debugMsg "Counting unique IPv6 addresses received > ${elCtUnq6}"
     fi
 
     # If local whitelist exists, use to filter blacklist

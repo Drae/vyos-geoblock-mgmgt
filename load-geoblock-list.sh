@@ -49,15 +49,15 @@
 #   These shoudld be created via EdgeOS BUI or CLI, and to have any
 #     effect must be assigned to one or more firewall rules
 #   Leave empty to not populate IPset netgroup
-fwGroupNets4="Nets4-BlackList"
-fwGroupNets6="Nets6-BlackList"
+fwGroupNets4="NETv4-BLOCKLIST"
+fwGroupNets6="NETv6-BLOCKLIST"
 
 # Persistent data location (directory)
 dirUserData="/config/user-data"
 #
 # File to retrieve persistent IPSET content (file, at least one required)
-fnIPSetSave4="fw-IPSET-4.txt"
-fnIPSetSave6="fw-IPSET-6.txt"
+fnIPSetSave4="geo-IPSET-4.txt"
+fnIPSetSave6="geo-IPSET-6.txt"
 #
 # Default verbosity (for messages to display/tty)
 #   0 = Completely silent
@@ -121,8 +121,8 @@ useLogger=2
 cmdBaseIPSet="sudo ipset"
 cmdBaseSSMTP="/usr/sbin/ssmtp"
 
-fwGroupTmp4="bl_tmp_4"
-fwGroupTmp6="bl_tmp_6"
+fwGroupTmp4="geo_tmp_4"
+fwGroupTmp6="geo_tmp_6"
 : ${TMPDIR:="/tmp"}
 #
 #-----------------------------------------------------------
@@ -229,7 +229,7 @@ startup()
         die 11 "Temp dir '${TMPDIR}' does not exist"
     fi
 
-    export TMPDIR="${TMPDIR}/.BL"
+    export TMPDIR="${TMPDIR}/.GEO"
 
     if ! mkdir -p ${TMPDIR}; then
         die 12 "Failed to create working dir '${TMPDIR}': error $?"
